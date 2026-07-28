@@ -61,7 +61,7 @@ PERMISSION_RULES = [
     {
         "tools": ["read_file", "write_file", "edit_file"],
         "check": lambda args: not (WORKDIR / args.get("path", "")).resolve().is_relative_to(WORKDIR),
-        "message": "Writing outside workspace",
+        "message": "Access outside workspace",
     },
     {
         "tools": ["bash"],
