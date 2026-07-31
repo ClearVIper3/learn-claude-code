@@ -332,6 +332,25 @@ def consolidate_memories():
     except Exception:
         pass
 
+def _find_memory_turn(messages, memory_msg):
+    """Locate the user turn to inject memory into, by object identity.
+
+    s09 bug fix: the compression pipeline mutates `messages` (snip/micro/compact
+    all shift indices), so a precomputed position drifts and silently drops the
+    memory injection. Re-find the turn by identity after each compaction step.
+    Only str-content user turns are returned, so callers can safely
+    string-concatenate memory onto the content.
+    """
+    if memory_msg is not None:
+        for i, m in enumerate(messages):
+            if m is memory_msg:
+                if isinstance(m.get("content"), str):
+                    return i
+                break  # object present but no longer a plain-text turn
+    for i in range(len(messages) - 1, -1, -1):
+        if messages[i].get("role") == "user" and isinstance(messages[i].get("content"), str):
+            return i
+    return None
 
 # Build SYSTEM with memory index
 def build_system() -> str:
@@ -584,7 +603,12 @@ def agent_loop(messages: list):
     reactive_retries = 0
     # s09: inject relevant memory content into the current user turn
     memories_content = load_memories(messages)
-    memory_turn = len(messages) - 1 if messages and isinstance(messages[-1].get("content"), str) else None
+    # s09: capture the *object* of the current user turn, not its index. The
+    # compression pipeline below mutates `messages` and shifts every later index,
+    # so a precomputed position would drift (and silently drop the memory). We
+    # re-locate it by identity after each compaction step instead.
+    memory_msg = messages[-1] if (messages
+        and isinstance(messages[-1].get("content"), str)) else None
     # s09: build system once per user turn; memory is updated after the loop returns
     system = build_system()
 
@@ -602,9 +626,13 @@ def agent_loop(messages: list):
             print("[auto compact]")
             messages[:] = compact_history(messages)
 
+        # s09: re-locate the user turn by *identity* — compaction may have
+        # shifted its index. Returns a str-content user turn, or None.
+        memory_turn = _find_memory_turn(messages, memory_msg)
+
         try:
             request_messages = messages
-            if memories_content and memory_turn is not None and memory_turn < len(messages):
+            if memories_content and memory_turn is not None:
                 request_messages = messages.copy()
                 request_messages[memory_turn] = {
                     **messages[memory_turn],
